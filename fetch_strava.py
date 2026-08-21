@@ -645,7 +645,6 @@ def generate_with_immich(gpx_path, filename, config, out_path):
             min_lat, max_lat = min(lats), max(lats)
             min_lon, max_lon = min(lons), max(lons)
 
-            api_param = "?apiKey=" + immich_api_key
             markers = []
             photo_grid_html = ""
 
@@ -708,13 +707,7 @@ def generate_with_immich(gpx_path, filename, config, out_path):
             markers.sort(key=lambda m: m["distance_m"])
 
             for i, m in enumerate(markers):
-                thumb = (
-                    immich_base
-                    + "/api/assets/"
-                    + m["photo_id"]
-                    + "/thumbnail"
-                    + api_param
-                )
+                thumb = "/immich/api/assets/" + m["photo_id"] + "/thumbnail"
                 fname = escape_html(m["filename"])
                 time_tag = (
                     '<span class="time-tag">' + m["time"] + "</span>" if m["time"] else ""
@@ -761,8 +754,6 @@ def generate_with_immich(gpx_path, filename, config, out_path):
         "{{AVG_HR}}": str(stats.get("avg_hr", "—")),
         "{{MAX_HR}}": str(stats.get("max_hr", "—")),
         "{{SPEED}}": str(stats.get("speed_kmh", "—")),
-        "{{IMMICH_BASE}}": immich_base,
-        "{{IMMICH_API_KEY}}": immich_api_key,
         "{{MARKER_JSON}}": markers_json,
         "{{ELEV_JSON}}": json.dumps(elev_data),
         "{{HR_JSON}}": json.dumps(hr_values),
@@ -955,8 +946,6 @@ def generate_minimal_page(gpx_path, out_path):
         "{{AVG_HR}}": "—",
         "{{MAX_HR}}": "—",
         "{{SPEED}}": f"{total_dist / 1000 / (dur / 3600):.1f}" if dur > 0 else "—",
-        "{{IMMICH_BASE}}": "",
-        "{{IMMICH_API_KEY}}": "",
         "{{MARKER_JSON}}": "[]",
         "{{ELEV_JSON}}": json.dumps(elev_data),
         "{{HR_JSON}}": json.dumps([None] * len(points)),

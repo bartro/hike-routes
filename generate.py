@@ -5,7 +5,6 @@ Merges the original hike_map generator with Chart.js HR chart and waypoint featu
 
 Usage:
     python3 generate.py          # Generate all hikes
-    python3 generate.py --serve  # Generate and serve on localhost:8081
 
 Directory structure:
     hike_routes/
@@ -421,13 +420,10 @@ def generate_hike_html(config, hike_key):
     start_time = utc_to_local(times[0]).strftime('%H:%M') if times else ''
     end_time = utc_to_local(times[-1]).strftime('%H:%M') if len(times) > 1 else ''
 
-    # Build photo grid HTML
+    # Build photo grid HTML (thumbs proxied via serve.py — no key in page)
     photo_grid_html = ''
-    immich_base = hike.get('immich_base_url', '')
-    immich_api_key = hike.get('immich_api_key', '')
-    api_param = "?apiKey=" + immich_api_key if immich_api_key else ""
     for i, m in enumerate(markers):
-        thumb = immich_base + "/api/assets/" + m['photo_id'] + "/thumbnail" + api_param
+        thumb = "/immich/api/assets/" + m['photo_id'] + "/thumbnail"
         time_tag = '<span class="time-tag">' + m['time'] + '</span>' if m['time'] else ''
         fname_esc = escape_html(m['filename'])
         photo_grid_html += '<div class="photo-thumb" data-idx="' + str(i) + '" onclick="showPhoto(' + str(i) + ')" title="' + fname_esc + '">'
@@ -476,8 +472,6 @@ def generate_hike_html(config, hike_key):
         '{{AVG_HR}}': str(stats.get('avg_hr', '—')),
         '{{MAX_HR}}': str(stats.get('max_hr', '—')),
         '{{SPEED}}': str(stats.get('speed_kmh', '—')),
-        '{{IMMICH_BASE}}': immich_base,
-        '{{IMMICH_API_KEY}}': immich_api_key,
         '{{MARKER_JSON}}': json.dumps(markers),
         '{{ELEV_JSON}}': json.dumps(elev_data),
         '{{HR_JSON}}': json.dumps(hr_values),

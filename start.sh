@@ -29,4 +29,17 @@ fi
 
 echo "Starting Hike Routes server on http://0.0.0.0:${PORT}"
 echo "Open http://localhost:${PORT} in your browser"
-cd "$OUTPUT_DIR" && python3 -m http.server "$PORT"
+# Pick the first interpreter that actually meets the repo requirement
+# (Python 3.10+, i.e. zoneinfo imports). Override with PYTHON=/path ./start.sh
+PY=""
+for CAND in "${PYTHON:-}" python3 python3.13 python3.12 python3.11 python3.10; do
+    if [ -n "$CAND" ] && command -v "$CAND" >/dev/null 2>&1 && "$CAND" -c 'import zoneinfo' 2>/dev/null; then
+        PY="$CAND"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "Error: no Python 3.10+ found (tried \$PYTHON, python3, python3.10–3.13)." >&2
+    exit 1
+fi
+exec "$PY" "$SCRIPT_DIR/serve.py" "$PORT"

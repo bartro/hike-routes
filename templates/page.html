@@ -159,17 +159,17 @@ body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif
 </div>
 
 <script>
-const IMMICH = '{{IMMICH_BASE}}';
-const IMMICH_KEY = '{{IMMICH_API_KEY}}';
+const IMMICH = '/immich';
 const MARKERS = {{MARKER_JSON}};
 const ELEV = {{ELEV_JSON}};
 const HR = {{HR_JSON}};
 const WAYPOINTS = {{WAYPOINTS_JSON}};
 const TRAIL_COORDS = {{TRAIL_JSON}};
 
-// Helper: append API key to Immich URL so browsers can load images
+// Photos are proxied through the site's own server (serve.py), which injects
+// the Immich API key server-side — the key never reaches the browser.
 function immichUrl(path) {
-    return IMMICH + path + (IMMICH_KEY ? '?apiKey=' + IMMICH_KEY : '');
+    return IMMICH + path;
 }
 
 // --- Map ---
