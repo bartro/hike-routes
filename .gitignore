@@ -1,9 +1,12 @@
-# Sensitive data
+# Sensitive config with API keys
 config.json
+
+# GPX data files
 data/*.gpx
+data/*.json
+
+# Output files
 output/
-gpx_data.json
-photos/
 
 # Python cache
 __pycache__/
@@ -13,3 +16,6 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local environment
+.env
