@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hike Routes</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#0d1117; color:#c9d1d9; }
+.container { max-width:960px; margin:0 auto; padding:32px 20px; }
+h1 { font-size:1.8rem; color:#f0f6fc; margin-bottom:8px; }
+.subtitle { color:#8b949e; margin-bottom:32px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:16px; }
+.card { background:#161b22; border:1px solid #21262d; border-radius:12px; padding:20px; text-decoration:none; color:inherit; display:block; transition:all 0.2s; }
+.card:hover { border-color:#58a6ff; transform:translateY(-2px); }
+.card-title { font-size:1.1rem; font-weight:600; color:#f0f6fc; margin-bottom:4px; }
+.card-meta { font-size:0.8rem; color:#8b949e; margin-bottom:12px; }
+.card-stats { display:flex; gap:16px; margin-bottom:12px; flex-wrap:wrap; }
+.card-stats div { font-size:0.8rem; }
+.card-stats .v { font-weight:700; color:#58a6ff; }
+.card-stats .l { color:#8b949e; }
+.card-desc { font-size:0.85rem; color:#8b949e; line-height:1.4; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>🏔️ Hike Routes</h1>
+    <p class="subtitle">Interactive hiking maps with elevation profiles, heart rate, and GPS-tagged photos</p>
+    <div class="grid">
+        {{CARDS}}
+    </div>
+</div>
+</body>
+</html>

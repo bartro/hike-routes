@@ -1,0 +1,13 @@
+{
+    "hikes": {
+        "2026-08-16-example": {
+            "title": "Example Hike",
+            "date": "2026-08-16",
+            "gpx_file": "20260816_101401.gpx",
+            "immich_album_id": "YOUR_ALBUM_ID_HERE",
+            "immich_base_url": "https://immich.example.com",
+            "immich_api_key": "YOUR_API_KEY_HERE",
+            "description": "Example hike with Immich album photos along the trail."
+        }
+    }
+}

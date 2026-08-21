@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{TITLE}} — Hike Route</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#0d1117; color:#c9d1d9; }
+
+.header {
+    background: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
+    border-bottom: 1px solid #21262d;
+    padding: 24px 32px;
+}
+.header h1 { font-size:1.6rem; font-weight:600; color:#f0f6fc; margin-bottom:4px; }
+.header .meta { color:#8b949e; font-size:0.9rem; display:flex; gap:16px; flex-wrap:wrap; }
+
+.stats {
+    display:flex; gap:24px; padding:12px 32px; background:#0d1117;
+    border-bottom:1px solid #21262d; flex-wrap:wrap;
+}
+.stat { display:flex; flex-direction:column; align-items:center; }
+.stat .val { font-size:1.25rem; font-weight:700; color:#58a6ff; }
+.stat .lbl { font-size:0.7rem; color:#8b949e; text-transform:uppercase; letter-spacing:0.5px; }
+
+.main-content { display:grid; grid-template-columns:1fr 380px; }
+@media(max-width:1024px) { .main-content { grid-template-columns:1fr; } }
+
+#map { width:100%; height:65vh; border-right:1px solid #21262d; }
+@media(max-width:1024px) { #map { border-right:none; border-bottom:1px solid #21262d; height:50vh; } }
+
+.sidebar { background:#161b22; overflow-y:auto; max-height:65vh; }
+@media(max-width:1024px) { .sidebar { max-height:none; } }
+
+.sidebar-section { padding:14px 16px; border-bottom:1px solid #21262d; }
+.sidebar-section h3 { font-size:0.8rem; color:#8b949e; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; display:flex; align-items:center; gap:8px; }
+.chart-container { background:#0d1117; border-radius:8px; padding:8px; }
+.chart-container canvas { width:100% !important; height:140px !important; }
+
+/* Waypoints */
+.waypoints { max-height:250px; overflow-y:auto; }
+.wp-item { display:flex; gap:8px; align-items:center; padding:6px 8px; border-radius:6px; background:#0d1117; margin-bottom:4px; }
+.wp-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.wp-info { flex:1; min-width:0; }
+.wp-time { color:#8b949e; font-size:0.75em; }
+.wp-ele { color:#58a6ff; font-size:0.85em; font-weight:600; }
+.wp-hr { font-size:0.8em; font-weight:600; margin-left:4px; }
+.wp-bar { height:3px; background:#21262d; border-radius:2px; margin-top:3px; }
+.wp-bar-fill { height:100%; border-radius:2px; background:#58a6ff; }
+
+/* Elevation */
+.elevation-container { background:#0d1117; border-top:1px solid #21262d; padding:16px 32px; }
+.elevation-container h3 { font-size:0.8rem; color:#8b949e; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
+#elev-chart { width:100%; height:100px; }
+
+/* Photo panel */
+.photo-panel { background:#0d1117; border-top:1px solid #21262d; padding:16px 32px; }
+.photo-panel h3 { font-size:0.8rem; color:#8b949e; text-transform:uppercase; letter-spacing:1px; margin-bottom:12px; }
+.photo-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:8px; }
+.photo-thumb { aspect-ratio:1; border-radius:8px; overflow:hidden; cursor:pointer; position:relative; border:2px solid transparent; transition:all 0.2s; }
+.photo-thumb:hover { border-color:#58a6ff; transform:scale(1.03); }
+.photo-thumb img { width:100%; height:100%; object-fit:cover; }
+.time-tag { position:absolute; bottom:4px; right:4px; background:rgba(0,0,0,0.7); color:#fff; font-size:0.65rem; padding:2px 6px; border-radius:4px; }
+
+/* Lightbox */
+.lightbox { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.95); z-index:9999; justify-content:center; align-items:center; cursor:pointer; }
+.lightbox.active { display:flex; }
+.lightbox img { max-width:95vw; max-height:90vh; object-fit:contain; border-radius:4px; }
+.lightbox .close { position:absolute; top:20px; right:24px; color:#fff; font-size:2rem; cursor:pointer; background:rgba(0,0,0,0.5); width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
+.lightbox .info { position:absolute; bottom:30px; left:50%; transform:translateX(-50%); color:#8b949e; font-size:0.85rem; background:rgba(0,0,0,0.6); padding:8px 16px; border-radius:8px; white-space:nowrap; }
+
+/* Floating controls */
+.back { position:absolute; top:12px; left:12px; z-index:1000; background:rgba(13,17,23,0.9); color:#c9d1d9; padding:8px 14px; border-radius:8px; text-decoration:none; font-size:0.85rem; border:1px solid #30363d; transition:all 0.2s; }
+.back:hover { color:#58a6ff; border-color:#58a6ff; }
+.photo-badge { position:absolute; top:12px; right:12px; z-index:1000; background:rgba(13,17,23,0.9); color:#58a6ff; padding:8px 14px; border-radius:8px; font-size:0.85rem; border:1px solid #30363d; font-weight:600; }
+.sat-toggle { position:absolute; top:12px; left:140px; z-index:1000; background:rgba(13,17,23,0.9); color:#c9d1d9; padding:8px 14px; border-radius:8px; font-size:0.85rem; border:1px solid #30363d; cursor:pointer; transition:all 0.2s; font-weight:600; }
+.sat-toggle:hover { color:#58a6ff; border-color:#58a6ff; }
+
+/* Photo popup on map */
+.photo-popup-content { min-width:220px; }
+.photo-popup-content img { width:100%; border-radius:8px; margin-bottom:8px; cursor:pointer; }
+.photo-popup-content .info-row { display:flex; justify-content:space-between; font-size:0.8rem; color:#8b949e; }
+.photo-popup-content .info-row .dist { color:#58a6ff; font-weight:600; }
+
+/* HR zone colors */
+.hr-resting { color:#4ecca3; }
+.hr-fatburn { color:#7ee8a0; }
+.hr-cardio { color:#f0c040; }
+.hr-peak { color:#e06040; }
+
+@media(max-width:768px) {
+    .header { padding:16px; }
+    .header h1 { font-size:1.2rem; }
+    .stats { padding:8px 16px; gap:16px; }
+    .photo-grid { grid-template-columns:repeat(auto-fill,minmax(100px,1fr)); }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+    <h1>{{TITLE}}</h1>
+    <div class="meta">
+        <span>📅 {{DATE}}</span>
+        <span>⏱ {{START_TIME}} — {{END_TIME}}</span>
+        <span>📸 {{PHOTO_COUNT}}/{{TOTAL_PHOTOS}} photos on trail</span>
+    </div>
+</div>
+
+<div class="stats">
+    <div class="stat"><span class="val">{{DISTANCE}}km</span><span class="lbl">km</span></div>
+    <div class="stat"><span class="val">{{ELEV_GAIN}}m</span><span class="lbl">gain</span></div>
+    <div class="stat"><span class="val">{{ELEV_LOSS}}m</span><span class="lbl">loss</span></div>
+    <div class="stat"><span class="val">{{MIN_ELEV}}m</span><span class="lbl">min</span></div>
+    <div class="stat"><span class="val">{{MAX_ELEV}}m</span><span class="lbl">max</span></div>
+    <div class="stat"><span class="val">{{DURATION}}</span><span class="lbl">duration</span></div>
+    <div class="stat"><span class="val">{{AVG_HR}}</span><span class="lbl">avg HR</span></div>
+    <div class="stat"><span class="val">{{MAX_HR}}</span><span class="lbl">max HR</span></div>
+    <div class="stat"><span class="val">{{SPEED}}</span><span class="lbl">km/h</span></div>
+</div>
+
+<div class="main-content">
+    <div>
+        <div style="position:relative;">
+            <a href="index.html" class="back">← All hikes</a>
+            <div class="sat-toggle" id="sat-toggle" onclick="toggleSat()">🛰 Satellite</div>
+            <div class="photo-badge">{{PHOTO_COUNT}} photos</div>
+            <div id="map"></div>
+        </div>
+        <div class="elevation-container">
+            <h3>Elevation Profile</h3>
+            <canvas id="elev-chart"></canvas>
+        </div>
+        <div class="photo-panel">
+            <h3>Photos along the trail ({{PHOTO_COUNT}})</h3>
+            <div class="photo-grid">{{PHOTO_GRID}}</div>
+        </div>
+    </div>
+    <div class="sidebar">
+        <div class="sidebar-section">
+            <h3><span class="fas fa-heart-pulse"></span> Heart Rate</h3>
+            <div class="chart-container"><canvas id="hr-chart"></canvas></div>
+        </div>
+        <div class="sidebar-section">
+            <h3><span class="fas fa-mountain"></span> Waypoints</h3>
+            <div class="waypoints" id="waypoints"></div>
+        </div>
+    </div>
+</div>
+
+<div class="lightbox" id="lightbox" onclick="closeLightbox(event)">
+    <div class="close">✕</div>
+    <img id="lightbox-img" onclick="event.stopPropagation()" />
+    <div class="info" id="lightbox-info"></div>
+</div>
+
+<script>
+const IMMICH = '{{IMMICH_BASE}}';
+const IMMICH_KEY = '{{IMMICH_API_KEY}}';
+const MARKERS = {{MARKER_JSON}};
+const ELEV = {{ELEV_JSON}};
+const HR = {{HR_JSON}};
+const WAYPOINTS = {{WAYPOINTS_JSON}};
+const TRAIL_COORDS = {{TRAIL_JSON}};
+
+// Helper: append API key to Immich URL so browsers can load images
+function immichUrl(path) {
+    return IMMICH + path + (IMMICH_KEY ? '?apiKey=' + IMMICH_KEY : '');
+}
+
+// --- Map ---
+const map = L.map('map', { preferCanvas: true }).setView([45.49, 25.90], 13);
+
+const streetLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 20
+}).addTo(map);
+
+const satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: '&copy; Esri &copy; Esri, Maxar, Earthstar Geographics, USDA, USGS, AeroGRID, IGN, and the GIS User Community',
+    maxZoom: 18
+});
+
+let isSat = false;
+
+function toggleSat() {
+    if (isSat) {
+        map.removeLayer(satLayer);
+        streetLayer.addTo(map);
+        document.getElementById('sat-toggle').textContent = '🛰 Satellite';
+    } else {
+        map.removeLayer(streetLayer);
+        satLayer.addTo(map);
+        document.getElementById('sat-toggle').textContent = '🗺 Street';
+    }
+    isSat = !isSat;
+}
+
+// Trail line with elevation coloring
+const minE = Math.min(...ELEV);
+const maxE = Math.max(...ELEV);
+
+function elevColor(e) {
+    const t = (e - minE) / (maxE - minE || 1);
+    if (t < 0.33) return '#238636';
+    if (t < 0.66) return '#d29922';
+    return '#da3633';
+}
+
+// Draw trail as colored segments
+for (let i = 0; i < TRAIL_COORDS.length - 1; i++) {
+    const avgE = (ELEV[Math.min(i, ELEV.length-1)] + ELEV[Math.min(i+1, ELEV.length-1)]) / 2;
+    L.polyline([TRAIL_COORDS[i], TRAIL_COORDS[i+1]], {
+        color: elevColor(avgE),
+        weight: 4,
+        opacity: 0.8
+    }).addTo(map);
+}
+
+// Start marker (green)
+const startIcon = L.divIcon({
+    className:'',
+    html:'<div style="background:#3fb950;color:#fff;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,0.4)">S</div>',
+    iconSize:[30,30], iconAnchor:[15,15]
+});
+L.marker(TRAIL_COORDS[0], { icon:startIcon, zIndexOffset:1000 }).addTo(map).bindPopup('<b style="font-size:14px">Start</b>');
+
+// End marker (red)
+const endIcon = L.divIcon({
+    className:'',
+    html:'<div style="background:#f85149;color:#fff;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,0.4)">E</div>',
+    iconSize:[30,30], iconAnchor:[15,15]
+});
+L.marker(TRAIL_COORDS[TRAIL_COORDS.length-1], { icon:endIcon, zIndexOffset:1000 }).addTo(map).bindPopup('<b style="font-size:14px">End</b>');
+
+// Photo markers on map
+const photoIcons = [];
+const photoPopups = [];
+const colors = ['#58a6ff','#f78166','#d2a8ff','#79c0ff','#a5d6ff','#ffa657','#7ee787','#f0e68c','#ff7b72','#d2a8ff','#79c0ff','#ff7b72'];
+
+MARKERS.forEach(function(m, i) {
+    const icon = L.divIcon({
+        className:'',
+        html:'<div style="background:'+colors[i%colors.length]+';color:#000;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.4);cursor:pointer">'+(i+1)+'</div>',
+        iconSize:[22,22], iconAnchor:[11,11]
+    });
+
+    const thumb = immichUrl('/api/assets/' + m.photo_id + '/thumbnail');
+    const distStr = m.distance_m < 1000 ? m.distance_m + 'm' : (m.distance_m/1000).toFixed(1) + 'km';
+
+    const popup = '<div class="photo-popup-content">' +
+        '<img src="'+thumb+'" onclick="openLightbox(\'' + m.photo_id + '\', '+ i + ')" />' +
+        '<div class="info-row">' +
+            '<span class="dist">'+distStr+' from start</span>' +
+            '<span>' + (m.time || '') + '</span>' +
+        '</div>' +
+    '</div>';
+
+    const pm = L.marker([m.lat, m.lon], { icon }).addTo(map);
+    pm.bindPopup(popup, { maxWidth:250, minWidth:220 });
+    photoIcons.push(pm);
+    photoPopups.push({ thumb: thumb, filename: m.filename, time: m.time, dist: distStr });
+});
+
+map.fitBounds(L.latLngBounds(TRAIL_COORDS), { padding:[30,30] });
+
+// --- Lightbox ---
+function openLightbox(photoId, idx) {
+    const lb = document.getElementById('lightbox');
+    const img = document.getElementById('lightbox-img');
+    const info = document.getElementById('lightbox-info');
+    img.src = immichUrl('/api/assets/' + photoId + '/original');
+    if (typeof idx === 'number') {
+        const d = photoPopups[idx];
+        info.textContent = d.filename + (d.time ? ' · ' + d.time : '') + ' · ' + d.dist;
+    }
+    lb.classList.add('active');
+}
+
+function closeLightbox(e) {
+    if (e && e.target !== document.getElementById('lightbox')) return;
+    document.getElementById('lightbox').classList.remove('active');
+}
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeLightbox({ target: document.getElementById('lightbox') });
+});
+
+// Photo panel click -> map jump
+function showPhoto(idx) {
+    if (photoIcons[idx]) {
+        photoIcons[idx].openPopup();
+        map.setView([MARKERS[idx].lat, MARKERS[idx].lon], 16);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+}
+
+// --- Elevation chart (Canvas) ---
+function drawElev() {
+    const canvas = document.getElementById('elev-chart');
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const w = rect.width - 64;
+    const h = 100;
+
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    ctx.scale(dpr, dpr);
+
+    const pad = { l:45, r:10, t:8, b:18 };
+    const pw = w - pad.l - pad.r;
+    const ph = h - pad.t - pad.b;
+
+    if (!ELEV.length) return;
+
+    const maxE = Math.max.apply(null, ELEV);
+    const minE = Math.min.apply(null, ELEV);
+    const range = maxE - minE || 1;
+
+    ctx.strokeStyle = '#21262d';
+    ctx.lineWidth = 0.5;
+    for (let i=0; i<=4; i++) {
+        const y = pad.t + ph * (i/4);
+        ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w-pad.r, y); ctx.stroke();
+        const val = Math.round(maxE - range*(i/4));
+        ctx.fillStyle = '#484f58'; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
+        ctx.fillText(val + 'm', pad.l-5, y+3);
+    }
+
+    ctx.beginPath();
+    ELEV.forEach(function(e, i) {
+        const x = pad.l + (i / (ELEV.length-1)) * pw;
+        const y = pad.t + ph - ((e - minE)/range) * ph;
+        i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    });
+    ctx.lineTo(pad.l + pw, pad.t + ph);
+    ctx.lineTo(pad.l, pad.t + ph);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t+ph);
+    grad.addColorStop(0, 'rgba(88,166,255,0.35)');
+    grad.addColorStop(1, 'rgba(88,166,255,0.03)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.beginPath();
+    ELEV.forEach(function(e, i) {
+        const x = pad.l + (i / (ELEV.length-1)) * pw;
+        const y = pad.t + ph - ((e - minE)/range) * ph;
+        i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    });
+    ctx.strokeStyle = '#58a6ff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+
+// --- Heart Rate Chart (Chart.js) ---
+function drawHRChart() {
+    const ctx = document.getElementById('hr-chart').getContext('2d');
+
+    // Create gradient for fill
+    const gradient = ctx.createLinearGradient(0, 0, 0, 140);
+    gradient.addColorStop(0, 'rgba(248,81,73,0.3)');
+    gradient.addColorStop(1, 'rgba(248,81,73,0.02)');
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: HR.map((_, i) => i),
+            datasets: [{
+                data: HR,
+                borderColor: '#f85149',
+                backgroundColor: gradient,
+                borderWidth: 1.5,
+                fill: true,
+                tension: 0.4,
+                pointRadius: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            const hr = Math.round(ctx.raw);
+                            let zone = '';
+                            if (hr < 100) zone = 'Resting';
+                            else if (hr < 130) zone = 'Fat Burn';
+                            else if (hr < 155) zone = 'Cardio';
+                            else zone = 'Peak';
+                            return hr + ' bpm - ' + zone;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { display: false },
+                y: {
+                    min: 50,
+                    max: 200,
+                    ticks: { color: '#484f58', font: { size: 10 }, callback: v => v + '' },
+                    grid: { color: '#21262d' },
+                    suggestedMax: 180
+                }
+            }
+        }
+    });
+}
+
+// --- Waypoints sidebar ---
+function buildWaypoints() {
+    const el = document.getElementById('waypoints');
+    WAYPOINTS.forEach(function(wp) {
+        const hrColor = wp.hr !== null ? getHRColor(wp.hr) : null;
+        const hrStr = hrColor !== null ? '<span class="wp-hr" style="color:' + hrColor + '">♥' + wp.hr + '</span>' : '';
+        const barWidth = wp.elev_pct !== null ? Math.max(0, Math.min(100, wp.elev_pct)) : 0;
+
+        const item = document.createElement('div');
+        item.className = 'wp-item';
+        item.innerHTML =
+            '<div class="wp-dot" style="background:' + (hrColor || '#58a6ff') + '"></div>' +
+            '<div class="wp-info">' +
+                '<div class="wp-time">' + wp.time + ' · ' + wp.lat + ',' + wp.lon + ' ' + hrStr + '</div>' +
+                '<div class="wp-ele">' + wp.ele + 'm</div>' +
+                '<div class="wp-bar"><div class="wp-bar-fill" style="width:' + barWidth + '%"></div></div>' +
+            '</div>';
+        el.appendChild(item);
+    });
+}
+
+function getHRColor(hr) {
+    if (hr < 100) return '#4ecca3';
+    if (hr < 130) return '#7ee8a0';
+    if (hr < 155) return '#f0c040';
+    return '#e06040';
+}
+
+// Init everything
+window.addEventListener('load', function() {
+    drawElev();
+    drawHRChart();
+    buildWaypoints();
+});
+window.addEventListener('resize', drawElev);
+</script>
+
+</body>
+</html>
