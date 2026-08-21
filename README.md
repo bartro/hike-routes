@@ -1,6 +1,6 @@
 # Hike Routes
 
-Interactive hiking route website with Strava-accurate elevation data, satellite maps, and photo integration.
+Interactive hiking route website with elevation data, satellite maps, and photo integration.
 
 ## Features
 
