@@ -284,9 +284,62 @@ def _measure_offset_seconds(photos_with_gps, trail_points):
     return sorted(offsets)[len(offsets) // 2]
 
 
+def spread_duplicate_markers(markers, radius_m=20):
+    """Photos sharing one snapped point would stack into a single unclickable
+    pin. Nudge each toward its own EXIF GPS (the true micro-position, kept
+    within radius_m of the snapped point); leftovers without usable EXIF get
+    deterministic circle slots ordered by shooting sequence."""
+    groups = {}
+    for m in markers:
+        groups.setdefault((m['lat'], m['lon']), []).append(m)
+    for (blat, blon), grp in groups.items():
+        if len(grp) < 2:
+            continue
+        targets = []
+        for m in grp:
+            raw = m.pop('_raw', None)
+            if raw and haversine(blat, blon, raw[0], raw[1]) <= radius_m:
+                targets.append((round(raw[0], 6), round(raw[1], 6)))
+            else:
+                targets.append(None)
+        seen = {}
+        slots = []
+        for i, t in enumerate(targets):
+            if t and t not in seen:
+                seen[t] = i
+            else:
+                slots.append(i)
+        n = len(grp)
+        coslat = math.cos(math.radians(blat)) or 1.0
+        for k, i in enumerate(slots):
+            ang = 2 * math.pi * (k + 0.5) / n
+            grp[i]['lat'] = blat + (radius_m * math.cos(ang)) / 111320
+            grp[i]['lon'] = blon + (radius_m * math.sin(ang)) / (111320 * coslat)
+        for t, i in seen.items():
+            grp[i]['lat'], grp[i]['lon'] = t
+
+    # Final sweep: bursts sharing one GPS lock can straddle two neighbouring
+    # points and land on the same EXIF target via different groups — fan any
+    # remaining exact collisions around their common position.
+    by_pos = {}
+    for m in markers:
+        by_pos.setdefault((m['lat'], m['lon']), []).append(m)
+    for (blat, blon), grp in by_pos.items():
+        if len(grp) < 2:
+            continue
+        n = len(grp)
+        coslat = math.cos(math.radians(blat)) or 1.0
+        for k, m in enumerate(grp):
+            ang = 2 * math.pi * (k + 0.5) / n
+            m['lat'] = blat + (radius_m * math.cos(ang)) / 111320
+            m['lon'] = blon + (radius_m * math.sin(ang)) / (111320 * coslat)
+    return markers
+
+
 def snap_photos_to_trail(photos, trail_points, offset_s=None):
-    """Place each photo on the trail. Tracks may be loops or out-and-backs where
-    the same coordinates occur at several times/distances, so snap by TIME when
+    """Place each photo on the trail. Expects the FULL-resolution track (1s
+    timestamps) — tracks may be loops or out-and-backs where the same
+    coordinates occur at several times/distances, so snap by TIME when
     possible (photo clock minus measured UTC offset) and fall back to the
     nearest spatial point only when the clock is unusable."""
     markers = []
@@ -300,6 +353,13 @@ def snap_photos_to_trail(photos, trail_points, offset_s=None):
                 pt['time'].replace('Z', '+00:00')).replace(tzinfo=None) if pt['time'] else None)
         except ValueError:
             track_times.append(None)
+
+    # cumulative distance along the track, one pass (used per marker)
+    cum = [0.0]
+    for i in range(1, len(trail_points)):
+        cum.append(cum[-1] + haversine(
+            trail_points[i-1]['lat'], trail_points[i-1]['lon'],
+            trail_points[i]['lat'], trail_points[i]['lon']))
 
     lats = [p['lat'] for p in trail_points]
     lons = [p['lon'] for p in trail_points]
@@ -352,12 +412,7 @@ def snap_photos_to_trail(photos, trail_points, offset_s=None):
 
         pt = trail_points[best_idx]
 
-        cum_dist = 0
-        for i in range(1, best_idx + 1):
-            cum_dist += haversine(
-                trail_points[i-1]['lat'], trail_points[i-1]['lon'],
-                trail_points[i]['lat'], trail_points[i]['lon']
-            )
+        cum_dist = cum[best_idx]
 
         dt_str = ''
         local = photo.get('localDateTime', '')
@@ -373,6 +428,7 @@ def snap_photos_to_trail(photos, trail_points, offset_s=None):
             'filename': photo.get('originalFileName', ''),
             'lat': pt['lat'],
             'lon': pt['lon'],
+            '_raw': (photo['latitude'], photo['longitude']),
             'ele': round(pt['ele']) if pt['ele'] else None,
             'time': dt_str,
             'distance_m': round(cum_dist),
@@ -380,7 +436,7 @@ def snap_photos_to_trail(photos, trail_points, offset_s=None):
         })
 
     markers.sort(key=lambda m: m['distance_m'])
-    return markers
+    return spread_duplicate_markers(markers)
 
 
 def infer_tz(photos_with_gps, trail_points):
@@ -429,11 +485,12 @@ def generate_hike_html(config, hike_key):
     gpx = parse_gpx(gpx_path)
     stats = calculate_stats(gpx['all_points'])
 
-    # Simplify GPX for web using RDP
-    trail_points = gpx['all_points']
+    # Simplify GPX for web using RDP (display only — snapping uses full_points)
+    full_points = gpx['all_points']
+    trail_points = full_points
     if len(trail_points) > 4000:
         trail_points = rdp_simplify(trail_points)
-        print(f"  Simplified {len(gpx['all_points'])} -> {len(trail_points)} points")
+        print(f"  Simplified {len(full_points)} -> {len(trail_points)} points")
 
     # Fetch Immich photos
     print("  Fetching Immich album...")
@@ -459,7 +516,9 @@ def generate_hike_html(config, hike_key):
     print(f"  Found {len(photos_with_gps)} photos with GPS")
 
     # Measured UTC offset (photo clocks vs track UTC); explicit config timezone wins
-    offset_s = _measure_offset_seconds(photos_with_gps, trail_points)
+    # Photo snapping + offset measurement use the FULL-resolution track (1s
+    # timestamps); the simplified set is only for polyline/chart/waypoints.
+    offset_s = _measure_offset_seconds(photos_with_gps, full_points)
     if hike.get('timezone'):
         tz = ZoneInfo(hike['timezone'])
     elif offset_s is not None:
@@ -469,7 +528,7 @@ def generate_hike_html(config, hike_key):
         tz = LOCAL_TZ
 
     # Snap to trail — time-based where possible (coordinates recur on loops)
-    markers = snap_photos_to_trail(photos_with_gps, trail_points, offset_s)
+    markers = snap_photos_to_trail(photos_with_gps, full_points, offset_s)
     print(f"  Placed {len(markers)} photos along trail")
 
     # Prepare elevation data (downsampled for chart)

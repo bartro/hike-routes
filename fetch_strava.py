@@ -516,6 +516,7 @@ def generate_with_immich(gpx_path, filename, config, out_path):
         escape_html,
         haversine,
         infer_tz,
+        spread_duplicate_markers,
     )
     import urllib.request
     import ssl
@@ -694,6 +695,16 @@ def generate_with_immich(gpx_path, filename, config, out_path):
             markers = []
             photo_grid_html = ""
 
+            # Snap against the FULL-resolution track (1s timestamps);
+            # trail_points (simplified) stays for display arrays only.
+            full_pts = gpx["all_points"]
+            cum = [0.0]
+            for i in range(1, len(full_pts)):
+                cum.append(cum[-1] + haversine(
+                    full_pts[i - 1]["lat"], full_pts[i - 1]["lon"],
+                    full_pts[i]["lat"], full_pts[i]["lon"],
+                ))
+
             for asset in album_data.get("assets", []):
                 exif = asset.get("exifInfo", {})
                 lat = exif.get("latitude")
@@ -707,7 +718,7 @@ def generate_with_immich(gpx_path, filename, config, out_path):
                     continue
 
                 # Prefer time-based snap: on loops/out-and-backs coordinates recur,
-                # so space alone is ambiguous. Gate: clock within 10min of a track
+                # so space alone is ambiguous. Gate: clock within 30min of a track
                 # point and matched point within 2km of the photo GPS.
                 best_idx, best_dist, limit = None, float("inf"), 300
                 if asset.get("localDateTime"):
@@ -717,7 +728,7 @@ def generate_with_immich(gpx_path, filename, config, out_path):
                         ).replace(tzinfo=None)
                         tgt = wall - timedelta(seconds=tz.utcoffset(None).total_seconds())
                         t_best_i, t_best_dt = None, None
-                        for i, tp in enumerate(trail_points):
+                        for i, tp in enumerate(full_pts):
                             if not tp["time"]:
                                 continue
                             dd = abs(
@@ -733,7 +744,7 @@ def generate_with_immich(gpx_path, filename, config, out_path):
                         if t_best_i is not None and t_best_dt <= 1800:
                             d = haversine(
                                 lat, lon,
-                                trail_points[t_best_i]["lat"], trail_points[t_best_i]["lon"],
+                                full_pts[t_best_i]["lat"], full_pts[t_best_i]["lon"],
                             )
                             if d <= 2000:
                                 best_idx, best_dist, limit = t_best_i, d, 2000
@@ -742,7 +753,7 @@ def generate_with_immich(gpx_path, filename, config, out_path):
 
                 if best_idx is None:
                     best_idx, best_dist = 0, float("inf")
-                    for i, pt in enumerate(trail_points):
+                    for i, pt in enumerate(full_pts):
                         d = haversine(lat, lon, pt["lat"], pt["lon"])
                         if d < best_dist:
                             best_dist = d
@@ -751,14 +762,7 @@ def generate_with_immich(gpx_path, filename, config, out_path):
                 if best_dist > limit:
                     continue
 
-                cum_dist = 0
-                for i in range(1, best_idx + 1):
-                    cum_dist += haversine(
-                        trail_points[i - 1]["lat"],
-                        trail_points[i - 1]["lon"],
-                        trail_points[i]["lat"],
-                        trail_points[i]["lon"],
-                    )
+                cum_dist = cum[best_idx]
 
                 local_dt = asset.get("localDateTime", "")
                 time_str = ""
@@ -773,10 +777,11 @@ def generate_with_immich(gpx_path, filename, config, out_path):
                     {
                         "photo_id": asset["id"],
                         "filename": asset.get("originalFileName", ""),
-                        "lat": trail_points[best_idx]["lat"],
-                        "lon": trail_points[best_idx]["lon"],
-                        "ele": round(trail_points[best_idx]["ele"])
-                        if trail_points[best_idx]["ele"]
+                        "lat": full_pts[best_idx]["lat"],
+                        "lon": full_pts[best_idx]["lon"],
+                        "_raw": (lat, lon),
+                        "ele": round(full_pts[best_idx]["ele"])
+                        if full_pts[best_idx]["ele"]
                         else None,
                         "time": time_str,
                         "distance_m": round(cum_dist),
@@ -785,6 +790,7 @@ def generate_with_immich(gpx_path, filename, config, out_path):
                 )
 
             markers.sort(key=lambda m: m["distance_m"])
+            spread_duplicate_markers(markers)
 
             for i, m in enumerate(markers):
                 thumb = "/immich/api/assets/" + m["photo_id"] + "/thumbnail"
