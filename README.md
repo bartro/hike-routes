@@ -55,8 +55,8 @@ Add entries to `config.json` for each hike:
   "hikes": {
     "hike-name": {
       "title": "Hike Name",
-      "date": "2026-08-16",
-      "gpx_file": "20260816_101401.gpx",
+      "date": "yyyy-mm-dd",
+      "gpx_file": "my_hike.gpx",
       "immich_album_id": "YOUR_ALBUM_ID",
       "immich_base_url": "https://immich.example.com",
       "immich_api_key": "YOUR_KEY"
