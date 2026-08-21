@@ -1,21 +1,27 @@
-# Sensitive config with API keys
+# Sensitive data
 config.json
-
-# GPX data files
+.env
 data/*.gpx
 data/*.json
-
-# Output files
 output/
 
-# Python cache
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+dist/
+build/
+venv/
+.env
 
-# OS files
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
 Thumbs.db
-
-# Local environment
-.env
