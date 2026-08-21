@@ -22,7 +22,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 LOCAL_TZ = ZoneInfo("Europe/Bucharest")
@@ -515,6 +515,7 @@ def generate_with_immich(gpx_path, filename, config, out_path):
         calculate_stats,
         escape_html,
         haversine,
+        infer_tz,
     )
     import urllib.request
     import ssl
@@ -560,6 +561,63 @@ def generate_with_immich(gpx_path, filename, config, out_path):
             elif prev is not None:
                 hr_values[i] = prev
 
+    # Immich config + album, fetched early: photo wall-clocks determine the hike's timezone
+    immich_base = ""
+    immich_api_key = ""
+    immich_album_id = ""
+    cfg_timezone = ""
+    markers_json = "[]"
+    photo_grid = ""
+    album_data = None
+
+    # Try to find a matching immich album by center coordinates
+    if gpx["all_points"]:
+        center_lat = sum(p["lat"] for p in gpx["all_points"]) / len(gpx["all_points"])
+        center_lon = sum(p["lon"] for p in gpx["all_points"]) / len(gpx["all_points"])
+
+        # Find matching immich album in config
+        for hike_key, hike_data in config.get("hikes", {}).items():
+            hike_date = hike_data.get("date", "")
+            file_date = os.path.splitext(filename)[0][:8]
+            if file_date in hike_date:
+                immich_base = hike_data.get("immich_base_url", "")
+                immich_api_key = hike_data.get("immich_api_key", "")
+                immich_album_id = hike_data.get("immich_album_id", "")
+                cfg_timezone = hike_data.get("timezone", "")
+                break
+
+    if immich_album_id and immich_api_key and immich_base:
+        try:
+            ctx = ssl.create_default_context()
+            album_url = immich_base + "/api/albums/" + immich_album_id
+            album_req = urllib.request.Request(
+                album_url,
+                headers={
+                    "x-api-key": immich_api_key,
+                    "Content-Type": "application/json",
+                },
+            )
+            with urllib.request.urlopen(album_req, timeout=120, context=ctx) as resp:
+                album_data = json.loads(resp.read().decode())
+        except Exception as e:
+            print(f"    Immich fetch failed: {e}")
+            album_data = None
+
+    # Timezone: explicit config wins, else measured from photo clocks vs track UTC
+    photos_for_tz = [
+        {
+            "latitude": a.get("exifInfo", {}).get("latitude"),
+            "longitude": a.get("exifInfo", {}).get("longitude"),
+            "localDateTime": a.get("localDateTime", ""),
+        }
+        for a in (album_data or {}).get("assets", [])
+        if a.get("exifInfo", {}).get("latitude")
+    ]
+    if cfg_timezone:
+        tz = ZoneInfo(cfg_timezone)
+    else:
+        tz = infer_tz(photos_for_tz, trail_points) or LOCAL_TZ
+
     # Waypoints
     waypoints_json = []
     num_waypoints = min(20, len(trail_points))
@@ -570,7 +628,7 @@ def generate_with_immich(gpx_path, filename, config, out_path):
         if pt["time"]:
             try:
                 dt = datetime.fromisoformat(pt["time"].replace("Z", "+00:00"))
-                time_str = dt.astimezone(LOCAL_TZ).strftime("%H:%M")
+                time_str = dt.astimezone(tz).strftime("%H:%M")
             except Exception:
                 pass
         waypoints_json.append(
@@ -591,14 +649,14 @@ def generate_with_immich(gpx_path, filename, config, out_path):
     if times:
         try:
             start_time = datetime.fromisoformat(times[0].replace("Z", "+00:00")).astimezone(
-                LOCAL_TZ
+                tz
             ).strftime("%H:%M")
         except Exception:
             start_time = ""
     if len(times) > 1:
         try:
             end_time = datetime.fromisoformat(times[-1].replace("Z", "+00:00")).astimezone(
-                LOCAL_TZ
+                tz
             ).strftime("%H:%M")
         except Exception:
             end_time = ""
@@ -625,20 +683,8 @@ def generate_with_immich(gpx_path, filename, config, out_path):
                 immich_album_id = hike_data.get("immich_album_id", "")
                 break
 
-    if immich_album_id and immich_api_key and immich_base:
+    if album_data:
         try:
-            ctx = ssl.create_default_context()
-            album_url = immich_base + "/api/albums/" + immich_album_id
-            album_req = urllib.request.Request(
-                album_url,
-                headers={
-                    "x-api-key": immich_api_key,
-                    "Content-Type": "application/json",
-                },
-            )
-            with urllib.request.urlopen(album_req, timeout=120, context=ctx) as resp:
-                album_data = json.loads(resp.read().decode())
-
             # Find photos near trail
             lats = [p["lat"] for p in trail_points]
             lons = [p["lon"] for p in trail_points]
@@ -660,15 +706,49 @@ def generate_with_immich(gpx_path, filename, config, out_path):
                 ):
                     continue
 
-                best_idx = 0
-                best_dist = float("inf")
-                for i, pt in enumerate(trail_points):
-                    d = haversine(lat, lon, pt["lat"], pt["lon"])
-                    if d < best_dist:
-                        best_dist = d
-                        best_idx = i
+                # Prefer time-based snap: on loops/out-and-backs coordinates recur,
+                # so space alone is ambiguous. Gate: clock within 10min of a track
+                # point and matched point within 2km of the photo GPS.
+                best_idx, best_dist, limit = None, float("inf"), 300
+                if asset.get("localDateTime"):
+                    try:
+                        wall = datetime.fromisoformat(
+                            asset["localDateTime"].replace("Z", "+00:00")
+                        ).replace(tzinfo=None)
+                        tgt = wall - timedelta(seconds=tz.utcoffset(None).total_seconds())
+                        t_best_i, t_best_dt = None, None
+                        for i, tp in enumerate(trail_points):
+                            if not tp["time"]:
+                                continue
+                            dd = abs(
+                                (
+                                    datetime.fromisoformat(
+                                        tp["time"].replace("Z", "+00:00")
+                                    ).replace(tzinfo=None)
+                                    - tgt
+                                ).total_seconds()
+                            )
+                            if t_best_dt is None or dd < t_best_dt:
+                                t_best_dt, t_best_i = dd, i
+                        if t_best_i is not None and t_best_dt <= 1800:
+                            d = haversine(
+                                lat, lon,
+                                trail_points[t_best_i]["lat"], trail_points[t_best_i]["lon"],
+                            )
+                            if d <= 2000:
+                                best_idx, best_dist, limit = t_best_i, d, 2000
+                    except ValueError:
+                        pass
 
-                if best_dist > 300:
+                if best_idx is None:
+                    best_idx, best_dist = 0, float("inf")
+                    for i, pt in enumerate(trail_points):
+                        d = haversine(lat, lon, pt["lat"], pt["lon"])
+                        if d < best_dist:
+                            best_dist = d
+                            best_idx = i
+
+                if best_dist > limit:
                     continue
 
                 cum_dist = 0

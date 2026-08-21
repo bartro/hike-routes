@@ -22,7 +22,7 @@ import math
 import urllib.request
 import ssl
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
@@ -48,10 +48,10 @@ def load_template(name):
 
 LOCAL_TZ = ZoneInfo('Europe/Bucharest')
 
-def utc_to_local(iso_str):
-    """Convert an ISO 8601 UTC string to local time (Europe/Bucharest, handles DST)."""
+def utc_to_local(iso_str, tz=LOCAL_TZ):
+    """Convert an ISO 8601 UTC string to the given timezone (default Europe/Bucharest)."""
     dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
-    return dt.astimezone(LOCAL_TZ)
+    return dt.astimezone(tz)
 
 
 def fetch_immich_album(album_id, api_key, base_url):
@@ -241,9 +241,65 @@ def calculate_stats(points):
     }
 
 
-def snap_photos_to_trail(photos, trail_points):
-    """Find nearest trail point for each photo and place along trail."""
+def _measure_offset_seconds(photos_with_gps, trail_points):
+    """Median (photo wall-clock − spatially-snapped track UTC) in seconds, or None.
+    Spatial snapping is fine for the measurement itself: the median discards the
+    minority of photos that snap to the wrong pass of a self-intersecting track."""
+    offsets = []
+    if not trail_points:
+        return None
+    lats = [p['lat'] for p in trail_points]
+    lons = [p['lon'] for p in trail_points]
+    min_lat, max_lat = min(lats), max(lats)
+    min_lon, max_lon = min(lons), max(lons)
+
+    for photo in photos_with_gps:
+        raw = photo.get('localDateTime', '')
+        if not raw:
+            continue
+        try:
+            wall = datetime.fromisoformat(raw.replace('Z', '+00:00')).replace(tzinfo=None)
+        except ValueError:
+            continue
+        lat, lon = photo['latitude'], photo['longitude']
+        if lat < min_lat - 0.02 or lat > max_lat + 0.02 or \
+           lon < min_lon - 0.02 or lon > max_lon + 0.02:
+            continue
+        best_idx, best_dist = 0, float('inf')
+        for i, pt in enumerate(trail_points):
+            d = haversine(lat, lon, pt['lat'], pt['lon'])
+            if d < best_dist:
+                best_dist, best_idx = d, i
+        if best_dist > 300 or not trail_points[best_idx]['time']:
+            continue
+        try:
+            utc = datetime.fromisoformat(
+                trail_points[best_idx]['time'].replace('Z', '+00:00')).replace(tzinfo=None)
+        except ValueError:
+            continue
+        offsets.append((wall - utc).total_seconds())
+
+    if not offsets:
+        return None
+    return sorted(offsets)[len(offsets) // 2]
+
+
+def snap_photos_to_trail(photos, trail_points, offset_s=None):
+    """Place each photo on the trail. Tracks may be loops or out-and-backs where
+    the same coordinates occur at several times/distances, so snap by TIME when
+    possible (photo clock minus measured UTC offset) and fall back to the
+    nearest spatial point only when the clock is unusable."""
     markers = []
+    if not trail_points:
+        return markers
+
+    track_times = []
+    for pt in trail_points:
+        try:
+            track_times.append(datetime.fromisoformat(
+                pt['time'].replace('Z', '+00:00')).replace(tzinfo=None) if pt['time'] else None)
+        except ValueError:
+            track_times.append(None)
 
     lats = [p['lat'] for p in trail_points]
     lons = [p['lon'] for p in trail_points]
@@ -259,16 +315,39 @@ def snap_photos_to_trail(photos, trail_points):
            lon < min_lon - 0.02 or lon > max_lon + 0.02:
             continue
 
-        best_idx = 0
-        best_dist = float('inf')
+        # Time-based snap: unique even where the track crosses itself.
+        # Gate: clock must agree with some track point within 10 min, and the
+        # matched point must lie within 2km of the photo's own GPS.
+        best_idx, best_dist, limit = None, float('inf'), 300
+        raw = photo.get('localDateTime', '')
+        if offset_s is not None and raw:
+            try:
+                wall = datetime.fromisoformat(raw.replace('Z', '+00:00')).replace(tzinfo=None)
+                tgt = wall - timedelta(seconds=offset_s)
+                t_best_i, t_best_dt = None, None
+                for i, tt in enumerate(track_times):
+                    if tt is None:
+                        continue
+                    dd = abs((tt - tgt).total_seconds())
+                    if t_best_dt is None or dd < t_best_dt:
+                        t_best_dt, t_best_i = dd, i
+                if t_best_i is not None and t_best_dt <= 1800:
+                    d = haversine(lat, lon,
+                                  trail_points[t_best_i]['lat'], trail_points[t_best_i]['lon'])
+                    if d <= 2000:
+                        best_idx, best_dist, limit = t_best_i, d, 2000
+            except ValueError:
+                pass
 
-        for i, pt in enumerate(trail_points):
-            d = haversine(lat, lon, pt['lat'], pt['lon'])
-            if d < best_dist:
-                best_dist = d
-                best_idx = i
+        # Spatial fallback (no clock / clock off / too far off-track)
+        if best_idx is None:
+            best_idx, best_dist = 0, float('inf')
+            for i, pt in enumerate(trail_points):
+                d = haversine(lat, lon, pt['lat'], pt['lon'])
+                if d < best_dist:
+                    best_dist, best_idx = d, i
 
-        if best_dist > 300:
+        if best_dist > limit:
             continue
 
         pt = trail_points[best_idx]
@@ -284,9 +363,9 @@ def snap_photos_to_trail(photos, trail_points):
         local = photo.get('localDateTime', '')
         if local:
             try:
-                dt = utc_to_local(local)
-                dt_str = dt.strftime('%H:%M')
-            except:
+                # Immich localDateTime is camera wall-clock (naive, Z-suffixed) — never re-convert
+                dt_str = datetime.fromisoformat(local.replace('Z', '+00:00')).strftime('%H:%M')
+            except ValueError:
                 pass
 
         markers.append({
@@ -302,6 +381,17 @@ def snap_photos_to_trail(photos, trail_points):
 
     markers.sort(key=lambda m: m['distance_m'])
     return markers
+
+
+def infer_tz(photos_with_gps, trail_points):
+    """Derive the hike's UTC offset from its own data: camera wall-clock
+    (Immich localDateTime) minus the nearest track point's UTC time.
+    Returns a fixed-offset tzinfo, or None if no GPS photos lie near the trail.
+    Median + 15-min rounding makes it robust to camera clock drift and DST."""
+    offset_s = _measure_offset_seconds(photos_with_gps, trail_points)
+    if offset_s is None:
+        return None
+    return timezone(timedelta(seconds=round(offset_s / 900) * 900))
 
 
 def escape_html(s):
@@ -368,8 +458,18 @@ def generate_hike_html(config, hike_key):
 
     print(f"  Found {len(photos_with_gps)} photos with GPS")
 
-    # Snap to trail
-    markers = snap_photos_to_trail(photos_with_gps, trail_points)
+    # Measured UTC offset (photo clocks vs track UTC); explicit config timezone wins
+    offset_s = _measure_offset_seconds(photos_with_gps, trail_points)
+    if hike.get('timezone'):
+        tz = ZoneInfo(hike['timezone'])
+    elif offset_s is not None:
+        # 15-min rounding, same as infer_tz — avoids baking camera-clock drift into pages
+        tz = timezone(timedelta(seconds=round(offset_s / 900) * 900))
+    else:
+        tz = LOCAL_TZ
+
+    # Snap to trail — time-based where possible (coordinates recur on loops)
+    markers = snap_photos_to_trail(photos_with_gps, trail_points, offset_s)
     print(f"  Placed {len(markers)} photos along trail")
 
     # Prepare elevation data (downsampled for chart)
@@ -417,8 +517,8 @@ def generate_hike_html(config, hike_key):
 
     # Times — convert from UTC to local
     times = [p['time'] for p in gpx['all_points'] if p['time']]
-    start_time = utc_to_local(times[0]).strftime('%H:%M') if times else ''
-    end_time = utc_to_local(times[-1]).strftime('%H:%M') if len(times) > 1 else ''
+    start_time = utc_to_local(times[0], tz).strftime('%H:%M') if times else ''
+    end_time = utc_to_local(times[-1], tz).strftime('%H:%M') if len(times) > 1 else ''
 
     # Build photo grid HTML (thumbs proxied via serve.py — no key in page)
     photo_grid_html = ''
@@ -440,7 +540,7 @@ def generate_hike_html(config, hike_key):
         if pt['time']:
             try:
                 dt = datetime.fromisoformat(pt['time'].replace('Z', '+00:00'))
-                time_str = dt.strftime('%H:%M')
+                time_str = dt.astimezone(tz).strftime('%H:%M')
             except:
                 time_str = ''
         else:

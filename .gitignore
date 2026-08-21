@@ -25,3 +25,11 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local environment
+.env
+
+# Machine-specific files (hardcoded local paths)
+AGENTS.md
+hike-routes.init
+
